@@ -10,7 +10,7 @@ env:
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
     branches: [ "master" ]
 
@@ -28,7 +28,7 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ env.REGISTRY_USERNAME }}
         password: ${{ env.REGISTRY_PASSWORD }}
-    - name: Build and push
+    - name: Build and push arm64
       id: docker_build
       uses: docker/build-push-action@v5
       with:
@@ -37,8 +37,18 @@ jobs:
         tags: |
           ${{ env.FULL_IMAGE }}
           ${{ env.LATEST_IMAGE }}
-        platforms: linux/arm64,linux/amd64
-        cache-from: type=registry,ref=${{ env.CACHE_IMAGE }}
-        cache-to: type=registry,ref=${{ env.CACHE_IMAGE }},mode=max
-      env:
-        FULL_IMAGE: ${{ env.FULL_IMAGE }}
+        platforms: linux/arm64 #,linux/amd64
+        cache-from: type=registry,ref=${{ env.CACHE_IMAGE }}-arm64
+        cache-to: type=registry,ref=${{ env.CACHE_IMAGE }}-arm64,mode=max
+    - name: Build and push amd64
+      id: docker_build_amd
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ env.FULL_IMAGE }}
+          ${{ env.LATEST_IMAGE }}
+        platforms: linux/amd64
+        cache-from: type=registry,ref=${{ env.CACHE_IMAGE }}-amd64
+        cache-to: type=registry,ref=${{ env.CACHE_IMAGE }}-amd64,mode=max
