@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html>
+
+    <head lang=en>
+        <meta charset=UTF-8>
+        <meta http-equiv=X-UA-Compatible content="IE=edge,chrome=1">
+        <meta name=HandheldFriendly content=true>
+        <meta name=description content>
+        <meta name=keywords content>
+        <script src="./js/sockjs.min.js"></script>
+        <script src="./js/marked.min.js"></script>
+        <!-- <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script> -->
+        <script src="./js/mathjax.min.js"></script>
+    </head>
+    <div class="body">
+        <input type="text" id="url" value="../chatwebsocket" hidden />
+        <input type="text" id="language" value="zh-CN" hidden />
+        <span id="status"></span>
+        <div id="notification" class="notification hidden">操作成功！</div>
+
+    </div>
+    <div class="body">
+        <div id="msg">
+        </div>
+    </div>
+    <div class="body">
+        <button class="btn" id="speech">语音输入</button>
+        <textarea row="5" id="params" oninput="autoResize(this)">你是谁</textarea>
+    </div>
+    <div class="body">
+        <input type="checkbox" id="read" unchecked />
+        <label for="read">朗读</label>
+        <button class="btn" onclick="newChat()">新对话</button>
+        <button class="btn" onclick="send()">发送</button>
+        <select id="model"></select>
+    </div>
+
+    <body>
+        <script type="text/javascript">
+            let socket
+            let index = 0
+            let doMathJax = {}
+
+            function loadModels() {
+                var url = "/api/tags"
+                httpRequest = new XMLHttpRequest()
+                httpRequest.open("GET", url, true)
+                httpRequest.onreadystatechange = function () {
+                    var status = httpRequest.status
+                    var d = httpRequest.responseText
+                    if (status != 200) {
+                        alert(status.toString() + ":" + d)
+                        return
+                    }
+                    if (httpRequest.readyState != 4) {
+                        return
+                    }
+                    console.log(d)
+                    var data = JSON.parse(d)
+                    let models = document.getElementById("model")
+                    models.innerHTML = ""
+                    for (i in data.models) {
+                        let op = document.createElement('option')
+                        op.innerHTML = data[i].model
+                        models.appendChild(op)
+                    }
+                    connect()
+                }
+                httpRequest.send()
+            }
+
+            function autoResize(textarea) {
+                textarea.style.height = 'auto'; // 重置高度
+                textarea.style.height = textarea.scrollHeight + 'px'; // 设置为内容高度
+            }
+
+            function updateMarkdownPreview(id, markdownText) {
+                const htmlContent = marked.parse(markdownText);
+                document.getElementById(id).innerHTML = htmlContent;
+            }
+
+            function getSocket(url, params, callback) {
+                if (typeof (SockJS) === 'undefined') {
+                    console.log('您的浏览器不支持WebSocket')
+                } else {
+                    console.log('您的浏览器支持WebSocket')
+
+                    // 初始化 WebSocket 对象，指定要连接的服务器地址与端口建立连接
+                    socket = new SockJS(url)
+
+                    // 打开事件
+                    socket.addEventListener('open', function () {
+                        console.log('Socket 已打开')
+                        // socket.send(params)
+                        webStatus()
+                    })
+
+                    // 获得消息事件
+                    socket.addEventListener('message', function (msg) {
+                        // 发现消息进入, 开始处理前端触发逻辑
+                        callback(msg, socket)
+                    })
+
+                    // 关闭事件
+                    socket.addEventListener('close', function () {
+                        console.log('Socket 已关闭')
+                        webStatus()
+                    })
+
+                    // 发生了错误事件
+                    socket.addEventListener('error', function () {
+                        console.log('Socket 发生了错误, 请刷新页面')
+                        webStatus()
+                        // 此时可以尝试刷新页面
+                    })
+                }
+                return socket
+            }
+
+            function closeSocket() {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.close()
+                }
+            }
+
+            function connect() {
+                let url = document.getElementById("url").value
+                let model = document.getElementById("model").value
+                if (model) {
+                    url += "/" + model
+                }
+                params = document.getElementById("params").value
+                currentMessage = ""
+                split = [",", "\n", "，", "。", "!", "?", "！", "？"]
+                return getSocket(url, params, function (msg, socket) {
+                    data = msg.data
+                    isEnd = false
+                    for (i = 0; i < split.length; i++) {
+                        if (data.indexOf(split[i]) !== -1) {
+                            isEnd = true
+                        }
+                    }
+                    currentMessage += data
+                    if (isEnd) {
+                        currentMessage = currentMessage.replaceAll(/<think>/g, '---\n')
+                        currentMessage = currentMessage.replaceAll(/<\/think>/g, '\n---\n')
+                        currentMessage = currentMessage.replaceAll(/\[/g, '\\[')
+                        currentMessage = currentMessage.replaceAll(/\]/g, '\\]')
+                        currentMessage = currentMessage.replaceAll(/\(/g, '\\(')
+                        currentMessage = currentMessage.replaceAll(/\)/g, '\\)')
+                        currentMessage = currentMessage.replaceAll(/\$/g, '\\$')
+                        console.log(currentMessage)
+                        span.value += currentMessage
+                        id = "msg-" + index
+                        mdId = "md-" + index
+                        document.getElementById(id).innerHTML += currentMessage
+                        updateMarkdownPreview(mdId, document.getElementById(id).innerHTML)
+                        scrollToBottom();
+                        speakText(currentMessage)
+                        currentMessage = ""
+                        resetDomathJax(mdId)
+                    }
+                })
+            }
+
+            function resetDomathJax(elementId) {
+                if (doMathJax[elementId]) {
+                    clearTimeout(doMathJax[elementId])
+                }
+                doMathJax[elementId] = setTimeout(function () {
+                    mathJax(elementId)
+                }, 2500)
+            }
+
+            function mathJax(elementId) {
+                MathJax.typeset([document.getElementById(elementId)]);
+            }
+
+            function newChat() {
+                document.getElementById("msg").innerHTML = ""
+                closeSocket()
+                socket = connect()
+            }
+
+            function speakText(textToSpeak) {
+                if ('speechSynthesis' in window) {
+                    if (!document.getElementById('read').checked) {
+                        return
+                    }
+                    const synth = window.speechSynthesis;
+                    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+
+                    // 设置语言
+                    utterance.lang = document.getElementById('language').value;
+
+                    // 设置音高、语速和音量
+                    // utterance.pitch = parseFloat(document.getElementById('pitch').value);
+                    // utterance.rate = parseFloat(document.getElementById('rate').value);
+                    // utterance.volume = parseFloat(document.getElementById('volume').value);
+
+                    synth.speak(utterance);
+                } else {
+                    alert('Speech synthesis is not supported in this browser.');
+                }
+            }
+            recognition = null
+
+            function startSpeechRecognition() {
+                if ('webkitSpeechRecognition' in window) {
+                    recognition = new webkitSpeechRecognition();
+                    recognition.continuous = true; // 是否连续识别
+                    recognition.interimResults = false; // 是否返回中间结果
+                    recognition.lang = 'zh-CN'; // 设置语言
+                    recognition.lang = document.getElementById('language').value;
+
+                    recognition.onstart = function () {
+                        console.log('语音识别已开始');
+                    };
+
+                    recognition.onresult = function (event) {
+                        const transcript = event.results[0][0].transcript;
+                        console.log(transcript)
+                        if (!transcript) {
+                            return
+                        }
+                        document.getElementById("params").value = transcript;
+                        send();
+                    };
+
+                    recognition.onerror = function (event) {
+                        console.error('语音识别错误:', event.error);
+                    };
+
+                    recognition.onend = function () {
+                        console.log('语音识别已结束');
+                    };
+
+                    recognition.start();
+                } else {
+                    alert('语音识别不被支持');
+                }
+            }
+
+            function stopSpeechRecognition() {
+                if (recognition) {
+                    recognition.stop();
+                }
+            }
+
+            function send() {
+                index++
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    const params = document.getElementById("params").value;
+                    socket.send(params);
+                    document.getElementById("params").value = ''
+                    req = document.createElement('div')
+                    req.id = "req-" + index
+                    req.className = "request"
+                    span = document.createElement('span')
+                    span.innerHTML = params + '<br/>'
+                    req.appendChild(span)
+
+                    reqRight = document.createElement('div')
+                    reqRight.className = "requestRight"
+
+                    reqBorad = document.createElement('div')
+                    reqBorad.className = "requestBoard"
+                    reqBorad.appendChild(req)
+                    reqBorad.appendChild(reqRight)
+                    document.getElementById("msg").appendChild(reqBorad)
+
+                    bettwenMsg = document.createElement('div')
+                    bettwenMsg.className = "bettwenMessage"
+                    bettwenMsg.innerHTML = new Date().toLocaleString()
+                    document.getElementById("msg").appendChild(bettwenMsg)
+
+                    msg = document.createElement('div')
+                    msg.id = "msg-" + index
+                    msg.className = "reply"
+
+
+                    md = document.createElement('div')
+                    md.id = "md-" + index
+                    md.className = "markdown"
+                    md.addEventListener('click', function () {
+                        t = md.innerText
+                        navigator.clipboard.writeText(t).then(
+                            () => {
+                                showNotification('已复制', 2000);
+                            },
+                            (e) => {
+                                /* failure */
+                                console.log(e)
+                            },
+                        );
+                    })
+
+                    replyBorad = document.createElement('div')
+                    replyBorad.className = "replyBoard"
+                    replyBorad.appendChild(msg)
+
+                    ds = document.createElement('img')
+                    ds.className = "pic"
+                    ds.src = "./images/deepseek.png"
+                    replyBorad.appendChild(ds)
+
+                    replyLeft = document.createElement('div')
+                    replyLeft.className = "replyLeft"
+
+                    replyBorad.appendChild(replyLeft)
+                    replyBorad.appendChild(md)
+                    document.getElementById("msg").appendChild(replyBorad)
+                    scrollToBottom();
+                } else {
+                    console.log('WebSocket is not open. Current state:', socket ? socket.readyState : 'null');
+                    alert('WebSocket is not open. Please connect first.');
+                }
+            }
+
+            function webStatus() {
+                if (socket) {
+                    s = ""
+                    switch (socket.readyState) {
+                        case 0:
+                            s = "正在连接"
+                            break
+                        case 1:
+                            s = "对方正在输入..."
+                            break
+                        case 2:
+                            s = "正在关闭"
+                            break
+                        case 3:
+                            s = "连接已关闭"
+                            break
+                    }
+                    document.getElementById('status').innerHTML = s
+                }
+            }
+
+            function showNotification(message, duration = 3000) {
+                const notify = document.getElementById('notification');
+                notify.textContent = message;
+                notify.classList.remove('hidden');
+
+                setTimeout(() => {
+                    notify.classList.add('hidden');
+                }, duration);
+            }
+
+            function scrollToBottom() {
+                const msgContainer = document.getElementById("msg");
+                msgContainer.scrollTop = msgContainer.scrollHeight;
+            }
+
+            listen = false
+
+            function speechOrStop() {
+                if (!listen) {
+                    stopSpeechRecognition()
+                    document.getElementById("speech").innerText = "开始语音识别"
+                    return
+                }
+                if (startSpeeck) {
+                    stopSpeechRecognition()
+                    document.getElementById("speech").innerText = "开始语音识别"
+                    speechOrStop()
+                    // setTimeout(speechOrStop, 1000)
+                } else {
+                    startSpeechRecognition()
+                    document.getElementById("speech").innerText = "停止语音识别"
+                    setTimeout(speechOrStop, 5000)
+                }
+                startSpeech = !startSpeech
+            }
+
+            let models = document.getElementById("model")
+            models.onchange = connect
+            loadModels()
+            socket = connect()
+            startSpeeck = false
+
+            document.getElementById("speech").addEventListener("click", function () {
+                listen = !listen
+                speechOrStop()
+            })
+            document.getElementById('params').addEventListener('keydown', function (event) {
+                if (event.keyCode === 13) {
+                    event.preventDefault();
+                    send();
+                }
+            });
+        </script>
+        <style>
+            .body {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                text-align: center;
+                padding-top: 10px;
+
+                #msg {
+                    width: 95%;
+                    height: 80%;
+                    max-height: 800px;
+                    font-size: 10px;
+                    overflow-y: auto;
+                    background-color: #f3f3f3;
+
+                    .requestBoard {
+                        display: flex;
+                        justify-content: end;
+                        /* align-items: right; */
+                        text-align: right;
+                        width: 100%;
+                        /* max-width: 600px; */
+
+                        .request {
+                            /* background-color: #ffffff; */
+                            background-color: #a9ea7a;
+                            color: #010101;
+                            border-radius: 4px;
+                            max-width: 70%;
+                            margin-top: 10px;
+                            margin-right: 20px;
+                            padding: 5px;
+                        }
+
+                        .requestRight {
+                            margin-top: 15px;
+                            margin-left: -20px;
+                            float: left;
+                            width: 0;
+                            height: 0;
+                            border-style: solid;
+                            border-width: 5px;
+                            border-color: transparent transparent transparent #a9ea7a;
+                            font-size: 0;
+                            line-height: 0;
+                        }
+
+                    }
+
+                    .bettwenMessage {
+                        color: #c6c6c6;
+                        display: block;
+                    }
+
+                    .replyBoard {
+                        display: block;
+                        align-items: left;
+                        text-align: left;
+                        width: 100%;
+
+                        .replyLeft {
+                            margin-top: 10px;
+                            margin-left: -5px;
+                            display: flex;
+                            float: left;
+                            width: 0;
+                            height: 0;
+                            border-style: solid;
+                            border-width: 5px;
+                            border-color: transparent #ffffff transparent transparent;
+                            font-size: 0;
+                            line-height: 0;
+                        }
+
+                        .copy {
+                            margin-top: 30px;
+                            margin-left: -40px;
+                            display: flex;
+                            float: left;
+                            border: none;
+                        }
+
+                        .markdown {
+                            /* background-color: #e8e8e9; */
+                            background-color: #ffffff;
+                            color: #010101;
+                            border-radius: 4px;
+                            max-width: 70%;
+                            margin: 40px;
+                            padding: 5px;
+                        }
+
+                        .reply {
+                            display: none;
+                        }
+                    }
+
+                }
+
+                .pic {
+                    display: flex;
+                    float: left;
+                    padding-left: 10px;
+                    height: 25px;
+                    width: 25px;
+                }
+
+                .btn {
+                    height: 25px;
+                    width: 70px;
+                    background: #409eff;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    margin: 10px;
+                }
+
+                #params {
+                    width: 80%;
+                    max-height: 800px;
+                    box-sizing: border-box;
+                    overflow: hidden;
+                    resize: none;
+                    transition: height 0.1s ease;
+                }
+            }
+
+            .notification {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 25px;
+                background: #4CAF50;
+                color: white;
+                border-radius: 4px;
+                transition: opacity 0.3s;
+            }
+
+            .hidden {
+                opacity: 0;
+                display: none;
+            }
+        </style>
+        </style>
+    </body>
+
+</html>
